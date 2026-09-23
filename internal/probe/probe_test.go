@@ -213,3 +213,71 @@ func TestRunEmpty(t *testing.T) {
 		t.Fatalf("got %d results for no targets", len(got))
 	}
 }
+
+func TestBackoffDoublesWithoutJitter(t *testing.T) {
+	cfg := Config{Backoff: 100 * time.Millisecond}
+	for attempt, want := range map[int]time.Duration{
+		1: 100 * time.Millisecond,
+		2: 200 * time.Millisecond,
+		3: 400 * time.Millisecond,
+	} {
+		if got := cfg.backoff(attempt); got != want {
+			t.Errorf("backoff(%d) = %v, want %v", attempt, got, want)
+		}
+	}
+}
+
+// Regression test: the old Backoff<<(attempt-1) formula produced a 17-year
+// wait at attempt 30, a negative wait at 35, and zero at 64.
+func TestBackoffNeverOverflows(t *testing.T) {
+	cfg := Config{Backoff: time.Second}
+	for _, attempt := range []int{30, 35, 64, 1000} {
+		if got := cfg.backoff(attempt); got != maxBackoff {
+			t.Errorf("backoff(%d) = %v, want the %v ceiling", attempt, got, maxBackoff)
+		}
+	}
+}
+
+func TestBackoffKeepsLargeExplicitValue(t *testing.T) {
+	cfg := Config{Backoff: time.Minute}
+	if got := cfg.backoff(5); got != time.Minute {
+		t.Fatalf("backoff = %v; a user-set 1m backoff must not be cut to %v", got, maxBackoff)
+	}
+}
+
+func TestBackoffZero(t *testing.T) {
+	if got := (Config{Jitter: true}).backoff(3); got != 0 {
+		t.Fatalf("backoff with Backoff=0 = %v, want 0", got)
+	}
+}
+
+func TestBackoffJitterBounds(t *testing.T) {
+	base := Config{Backoff: 100 * time.Millisecond, Jitter: true} // attempt 3 => 400ms before jitter
+	cases := map[float64]time.Duration{
+		0:   200 * time.Millisecond, // floor is half the wait
+		0.5: 300 * time.Millisecond,
+	}
+	for r, want := range cases {
+		cfg := base
+		cfg.rand = func() float64 { return r }
+		if got := cfg.backoff(3); got != want {
+			t.Errorf("rand=%v: backoff = %v, want %v", r, got, want)
+		}
+	}
+}
+
+func TestBackoffJitterRealRandomStaysInRange(t *testing.T) {
+	cfg := Config{Backoff: 100 * time.Millisecond, Jitter: true}
+	lo, hi := 200*time.Millisecond, 400*time.Millisecond
+	seen := map[time.Duration]bool{}
+	for i := 0; i < 1000; i++ {
+		got := cfg.backoff(3)
+		if got < lo || got >= hi {
+			t.Fatalf("backoff = %v, want within [%v, %v)", got, lo, hi)
+		}
+		seen[got] = true
+	}
+	if len(seen) < 2 {
+		t.Fatal("jitter produced the same wait every time")
+	}
+}

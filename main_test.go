@@ -57,6 +57,13 @@ func TestAllDownOmitsLatency(t *testing.T) {
 	}
 }
 
+func TestJitterFlagCanBeDisabled(t *testing.T) {
+	srv := server(t, http.StatusOK)
+	if code, _, _ := runCLI("-jitter=false", srv.URL); code != exitOK {
+		t.Fatalf("exit %d with -jitter=false", code)
+	}
+}
+
 func TestJSONOutput(t *testing.T) {
 	srv := server(t, http.StatusOK)
 	code, out, _ := runCLI("-o", "json", srv.URL)

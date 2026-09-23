@@ -29,7 +29,7 @@ The alternative, `http.Client.Timeout`, covers only the first case, and only for
 
 ## 4. Backoff that doesn't ignore cancellation
 
-Retries wait `Backoff × 2^(attempt−1)`. The obvious implementation, `time.Sleep(wait)`, has a bug: if the user presses `Ctrl-C` during a 30-second backoff, the program waits 30 seconds before noticing. pulsecheck instead `select`s on a timer and `ctx.Done()`, so cancellation wins immediately. `TestCheckCancelDuringBackoff` sets a 10-second backoff, cancels after 50ms, and fails if the check takes longer than 2 seconds.
+Retries wait `Backoff × 2^(attempt−1)`, capped and jittered (see section 11). The obvious implementation, `time.Sleep(wait)`, has a bug: if the user presses `Ctrl-C` during a 30-second backoff, the program waits 30 seconds before noticing. pulsecheck instead `select`s on a timer and `ctx.Done()`, so cancellation wins immediately. `TestCheckCancelDuringBackoff` sets a 10-second backoff, cancels after 50ms, and fails if the check takes longer than 2 seconds.
 
 The timer is explicitly stopped on the cancel path so it doesn't linger until it fires.
 
@@ -60,3 +60,15 @@ The JSON decoder uses `DisallowUnknownFields`. A misspelled key like `timout_ms`
 ## 10. No dependencies, non-root container
 
 pulsecheck uses only the standard library, so there is no supply chain to audit and `go install` needs nothing else. The container is a static `CGO_ENABLED=0` binary on a distroless base, running as non-root and writing no files — which is what OpenShift's default restricted security policy requires, since it runs containers under an arbitrary UID.
+
+## 11. A backoff ceiling, and jitter
+
+The first version computed the wait as `Backoff << (attempt-1)`. That has two problems.
+
+**It overflows.** `time.Duration` is an `int64` of nanoseconds. With a 1-second backoff, attempt 30 produced a wait of about 17 years, attempt 35 overflowed into a *negative* wait, and attempt 64 produced zero — so a large `-retries` value would either hang forever or retry in a tight loop. The fix doubles in a loop that stops at a ceiling of `max(30s, Backoff)`, so the value can never grow past it. The ceiling is `max(...)` rather than a flat 30s so that a user who deliberately sets `-backoff 1m` doesn't have it silently cut. `TestBackoffNeverOverflows` pins the old failure cases.
+
+**Retries synchronise.** When one upstream outage takes down many targets at once, they all fail together, back off by identical amounts, and retry at the same instant — hammering the service just as it recovers (the "thundering herd"). Jitter randomises each wait.
+
+pulsecheck uses *equal jitter*: half the wait is kept as a floor and the other half is random, giving a wait in `[wait/2, wait)`. *Full jitter* (`[0, wait)`) spreads load even better, but can produce near-zero waits, which defeats the point of backing off from a struggling service. For a health checker, a guaranteed minimum delay matters more.
+
+Randomness is hard to test, so the random source is an unexported `rand func() float64` field on `Config`. Tests replace it with a fixed value to assert exact results (`rand=0` must give exactly `wait/2`), and a second test runs the real generator 1,000 times to check every result stays in range and that the values actually vary.

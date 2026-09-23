@@ -43,6 +43,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	retries := fs.Int("retries", 2, "retries per target after a failure")
 	backoff := fs.Duration("backoff", 200*time.Millisecond, "wait before the first retry; doubles each retry")
 	timeout := fs.Duration("timeout", 5*time.Second, "default per-request timeout")
+	jitter := fs.Bool("jitter", true, "randomise retry waits so failing targets don't retry in lockstep")
 	format := fs.String("o", "text", "output format: text or json")
 	showVersion := fs.Bool("version", false, "print version and exit")
 	fs.Usage = func() {
@@ -90,6 +91,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		Retries:     *retries,
 		Backoff:     *backoff,
 		Timeout:     *timeout,
+		Jitter:      *jitter,
 	}
 	results := probe.Run(ctx, cfg, targets)
 	sum := probe.Summarize(results)

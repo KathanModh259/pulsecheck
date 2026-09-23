@@ -24,7 +24,7 @@ Most outages start as a quiet failure nobody is watching. pulsecheck grew out of
 
 - **Bounded concurrency** — a fixed worker pool (`-c`) checks targets in parallel without ever opening more than `c` connections at once.
 - **Per-request timeouts** — every request carries its own deadline via `context`, configurable globally or per target.
-- **Retries with exponential backoff** — transient failures are retried (`-retries`, `-backoff`), with the wait doubling each attempt.
+- **Retries with exponential backoff and jitter** — transient failures are retried (`-retries`, `-backoff`); the wait doubles each attempt up to a 30s ceiling, and jitter (`-jitter`, on by default) spreads retries out so failing targets don't all retry at once.
 - **Clean cancellation** — `Ctrl-C` / `SIGTERM` aborts in-flight requests and skips pending backoff sleeps immediately.
 - **Latency percentiles** — p50 / p95 / p99 / max over healthy targets.
 - **Text or JSON output** — human-readable tables, or `-o json` for machines.
@@ -54,6 +54,7 @@ pulsecheck [flags] [URL ...]
   -retries N      retries per target after a failure (default 2)
   -backoff D      wait before the first retry; doubles each retry (default 200ms)
   -timeout D      default per-request timeout (default 5s)
+  -jitter         randomise retry waits (default true; use -jitter=false to disable)
   -o FORMAT       text or json (default text)
   -version        print version and exit
 ```

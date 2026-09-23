@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net/http"
 	"net/url"
 	"sync"
@@ -37,8 +38,16 @@ type Config struct {
 	Retries     int           // extra attempts after the first failure
 	Backoff     time.Duration // wait before the first retry; doubles each retry
 	Timeout     time.Duration // default per-request timeout
+	Jitter      bool          // randomise backoff so failing targets don't retry in lockstep
 	Client      *http.Client  // nil means http.DefaultClient
+
+	rand func() float64 // returns [0,1); nil means math/rand/v2. Swappable in tests.
 }
+
+// maxBackoff caps exponential growth. Without it, Backoff << (attempt-1)
+// reaches years after ~30 retries and then overflows int64 into a negative
+// or zero wait, so retries either hang or fire with no delay at all.
+const maxBackoff = 30 * time.Second
 
 const notRun = "not run: cancelled"
 
@@ -60,8 +69,7 @@ func (c Config) Check(ctx context.Context, t Target) Result {
 		if res.Up || attempt > c.Retries || ctx.Err() != nil {
 			return res
 		}
-		wait := c.Backoff << (attempt - 1) // Backoff, 2x, 4x, ...
-		timer := time.NewTimer(wait)
+		timer := time.NewTimer(c.backoff(attempt))
 		select {
 		case <-timer.C:
 		case <-ctx.Done():
@@ -69,6 +77,34 @@ func (c Config) Check(ctx context.Context, t Target) Result {
 			return res
 		}
 	}
+}
+
+// backoff returns the wait before retry number attempt (1-based): Backoff,
+// doubled per attempt, capped at max(maxBackoff, Backoff), then optionally
+// jittered. Doubling stops at the cap, so it can never overflow.
+func (c Config) backoff(attempt int) time.Duration {
+	if c.Backoff <= 0 {
+		return 0
+	}
+	ceiling := max(maxBackoff, c.Backoff) // never shrink a large explicit backoff
+	wait := c.Backoff
+	for i := 1; i < attempt && wait < ceiling; i++ {
+		wait *= 2
+	}
+	wait = min(wait, ceiling)
+	if !c.Jitter {
+		return wait
+	}
+	// "Equal jitter": keep half the wait as a floor so retries still back
+	// off, and randomise the other half. When many targets fail together
+	// (say, one upstream outage), this spreads their retries out instead of
+	// every worker hammering the recovering service at the same instant.
+	r := c.rand
+	if r == nil {
+		r = rand.Float64
+	}
+	half := wait / 2
+	return half + time.Duration(r()*float64(wait-half))
 }
 
 // once performs a single GET with its own timeout derived from ctx.
