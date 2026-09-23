@@ -1,0 +1,5 @@
+[
+  { "name": "red-hat", "url": "https://www.redhat.com" },
+  { "name": "go-dev", "url": "https://go.dev", "timeout_ms": 3000 },
+  { "name": "no-content", "url": "https://httpbin.org/status/204", "expect_status": 204 }
+]
